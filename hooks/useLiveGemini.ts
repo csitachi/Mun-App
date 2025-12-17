@@ -44,21 +44,19 @@ export const useLiveGemini = ({ language, proficiency, voiceName, mode }: UseLiv
   }, []);
 
   const disconnect = useCallback(() => {
+    console.log("Disconnecting Gemini Live session...");
     if (sessionRef.current) {
         try { sessionRef.current.close(); } catch (e) {}
         sessionRef.current = null;
     }
-
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop());
       streamRef.current = null;
     }
-
     if (processorRef.current) {
       processorRef.current.disconnect();
       processorRef.current = null;
     }
-
     if (inputAudioContextRef.current) {
       inputAudioContextRef.current.close().catch(() => {});
       inputAudioContextRef.current = null;
@@ -67,12 +65,8 @@ export const useLiveGemini = ({ language, proficiency, voiceName, mode }: UseLiv
       audioContextRef.current.close().catch(() => {});
       audioContextRef.current = null;
     }
-
-    sourcesRef.current.forEach(source => {
-        try { source.stop(); } catch(e) {}
-    });
+    sourcesRef.current.forEach(source => { try { source.stop(); } catch(e) {} });
     sourcesRef.current.clear();
-
     setIsConnected(false);
     setIsSpeaking(false);
     setVolume(0);
@@ -80,16 +74,21 @@ export const useLiveGemini = ({ language, proficiency, voiceName, mode }: UseLiv
 
   const connect = useCallback(async () => {
     setError(null);
+    console.log("Initializing connection to Gemini Live API...");
+    
     try {
-      // THE API_KEY MUST BE OBTAINED FROM process.env.API_KEY
       const apiKey = process.env.API_KEY;
       
-      if (!apiKey || apiKey === 'YOUR_API_KEY_HERE') {
+      if (!apiKey) {
+        console.error("CRITICAL ERROR: process.env.API_KEY is undefined.");
         throw new Error("MISSING_API_KEY");
       }
 
+      if (window.self !== window.top) {
+        throw new Error("IFRAME_BLOCKED");
+      }
+
       const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-      
       const outputCtx = new AudioContextClass({ sampleRate: 24000 });
       if (outputCtx.state === 'suspended') await outputCtx.resume();
       audioContextRef.current = outputCtx;
@@ -104,12 +103,12 @@ export const useLiveGemini = ({ language, proficiency, voiceName, mode }: UseLiv
       analyserRef.current = analyser;
       analyser.connect(outputCtx.destination);
 
+      console.log("Requesting microphone access...");
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
 
       const ai = new GoogleGenAI({ apiKey });
-      
-      const systemInstruction = `You are a helpful and patient language tutor. Help the user practice ${language}. Proficiency: ${proficiency}. Mode: ${mode}.`;
+      const systemInstruction = `You are an expert language tutor. Help the user practice ${language}. Proficiency level: ${proficiency}. Current mode: ${mode}. Be encouraging, keep the flow natural, and provide brief corrections if requested.`;
 
       const sessionPromise = ai.live.connect({
         model: 'gemini-2.5-flash-native-audio-preview-09-2025',
@@ -124,6 +123,7 @@ export const useLiveGemini = ({ language, proficiency, voiceName, mode }: UseLiv
         },
         callbacks: {
           onopen: () => {
+            console.log("WebSocket Session Opened Successfully.");
             setIsConnected(true);
             const source = inputCtx.createMediaStreamSource(stream);
             const scriptProcessor = inputCtx.createScriptProcessor(4096, 1, 1);
@@ -155,7 +155,6 @@ export const useLiveGemini = ({ language, proficiency, voiceName, mode }: UseLiv
             if (audioData && outputCtx) {
               setIsSpeaking(true);
               const audioBuffer = await decodeAudioData(base64ToUint8Array(audioData), outputCtx, 24000, 1);
-              
               const currentTime = outputCtx.currentTime;
               nextStartTimeRef.current = Math.max(nextStartTimeRef.current, currentTime);
               
@@ -179,10 +178,13 @@ export const useLiveGemini = ({ language, proficiency, voiceName, mode }: UseLiv
                setIsSpeaking(false);
             }
           },
-          onclose: () => disconnect(),
+          onclose: (e) => {
+            console.log("Session closed:", e);
+            disconnect();
+          },
           onerror: (e) => {
-            console.error("Live session error", e);
-            setError("Kết nối Gemini Live API thất bại. Có thể API Key của bạn không hợp lệ hoặc đã hết hạn.");
+            console.error("Gemini Session Error:", e);
+            setError("Lỗi kết nối API. Có thể API Key của bạn không hỗ trợ tính năng Native Audio.");
             disconnect();
           }
         }
@@ -191,13 +193,13 @@ export const useLiveGemini = ({ language, proficiency, voiceName, mode }: UseLiv
       sessionRef.current = await sessionPromise;
 
     } catch (error: any) {
-      console.error("Connection error detail:", error);
+      console.error("CONNECTION FAILED:", error);
       if (error.message === "MISSING_API_KEY") {
-        setError("LỖI CẤU HÌNH: Bạn đã đặt tên biến là GEMINI_API_KEY, nhưng hệ thống yêu cầu tên chính xác là API_KEY. Hãy đổi tên biến trong Vercel Settings.");
-      } else if (error.name === "NotAllowedError" || error.name === "PermissionDeniedError") {
-        setError("LỖI MICROPHONE: Trình duyệt hoặc Vercel SafeFrame đã chặn Microphone. Hãy tắt Vercel Toolbar hoặc mở link trực tiếp.");
+        setError("LỖI CẤU HÌNH: Ứng dụng không tìm thấy API_KEY. Hãy kiểm tra tab Environment Variables trong Vercel và đảm bảo tên biến là 'API_KEY' (không phải 'GEMINI_API_KEY').");
+      } else if (error.message === "IFRAME_BLOCKED" || error.name === "NotAllowedError" || error.name === "PermissionDeniedError") {
+        setError("LỖI MICROPHONE: Microphone bị chặn do đang chạy trong SafeFrame/Iframe của Vercel Toolbar. Hãy tắt Toolbar trong Vercel Settings.");
       } else {
-        setError(error.message || "Lỗi không xác định khi kết nối.");
+        setError(`Lỗi: ${error.message || "Không xác định"}`);
       }
       disconnect();
       throw error;
