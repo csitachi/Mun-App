@@ -1,0 +1,7 @@
+{
+  "name": "LinguaLive",
+  "description": "A real-time AI language practice partner using Gemini Live API.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
