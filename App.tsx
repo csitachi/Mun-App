@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { PhoneOff, MessageSquare, Settings, Share, AlertCircle, ExternalLink, ShieldAlert, Key } from 'lucide-react';
+import { PhoneOff, MessageSquare, Settings, Share, AlertCircle, ExternalLink, ShieldAlert, Key, Globe } from 'lucide-react';
 import { GoogleGenAI } from '@google/genai';
 import LanguageSelector from './components/LanguageSelector';
 import Visualizer from './components/Visualizer';
@@ -35,6 +35,7 @@ function App() {
     const standalone = window.matchMedia('(display-mode: standalone)').matches || (navigator as any).standalone;
     setIsIOS(ios);
     setIsStandalone(standalone);
+    // Kiểm tra xem app có đang bị nhúng trong iframe (Vercel Toolbar) không
     setIsFramed(window.self !== window.top);
   }, []);
 
@@ -116,6 +117,36 @@ function App() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  // Lớp phủ ngăn chặn sử dụng nếu ở trong Iframe
+  if (isFramed) {
+    return (
+      <div className="fixed inset-0 z-[9999] bg-slate-900 flex items-center justify-center p-6 text-center">
+        <div className="max-w-md space-y-6">
+          <div className="w-20 h-20 bg-amber-500/10 text-amber-500 rounded-full flex items-center justify-center mx-auto mb-4">
+            <ShieldAlert size={48} />
+          </div>
+          <h1 className="text-2xl font-bold text-white">Phát hiện SafeFrame / Iframe</h1>
+          <p className="text-slate-400">
+            Ứng dụng đang chạy trong thanh công cụ của Vercel. Trình duyệt sẽ chặn Microphone vì lý do bảo mật.
+          </p>
+          <div className="bg-slate-800 p-4 rounded-xl border border-slate-700 text-left space-y-3">
+            <div className="flex gap-3 text-xs text-slate-300">
+              <AlertCircle className="text-amber-500 shrink-0" size={16} />
+              <span>Nhấn vào nút bên dưới để mở ứng dụng ở tab mới.</span>
+            </div>
+          </div>
+          <a 
+            href={window.location.href} 
+            target="_top" 
+            className="flex items-center justify-center gap-2 w-full py-4 rounded-xl bg-cyan-500 text-white font-bold shadow-lg hover:bg-cyan-600 transition-all"
+          >
+            Mở Link Trực Tiếp <ExternalLink size={20} />
+          </a>
+        </div>
+      </div>
+    );
+  }
+
   if (appState.status === 'setup') {
     return (
       <div className="relative min-h-screen">
@@ -148,40 +179,20 @@ function App() {
     <div className="flex h-screen bg-slate-900 overflow-hidden relative">
       <div className="absolute inset-0 bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 z-0" />
       
-      {/* Cảnh báo lỗi cấu hình Vercel */}
-      {(connectionError || isFramed) && !isConnected && (
-        <div className="absolute top-24 left-1/2 -translate-x-1/2 z-50 w-[90%] max-w-md space-y-3">
-          {connectionError?.includes("GEMINI_API_KEY") && (
-            <div className="bg-amber-500 text-slate-900 p-4 rounded-xl shadow-2xl flex items-start gap-3 border border-amber-400 animate-in fade-in zoom-in duration-300">
-              <Key className="shrink-0 mt-0.5" size={20} />
-              <div className="text-xs">
-                <p className="font-bold">Sai tên biến môi trường!</p>
-                <p>Hãy vào Vercel Settings, đổi tên <code className="bg-amber-600 px-1 rounded">GEMINI_API_KEY</code> thành <code className="bg-amber-600 px-1 rounded font-bold">API_KEY</code>.</p>
+      {/* Cảnh báo lỗi kết nối */}
+      {connectionError && !isConnected && (
+        <div className="absolute top-24 left-1/2 -translate-x-1/2 z-50 w-[90%] max-w-md">
+          <div className="bg-red-500/90 backdrop-blur-md text-white p-4 rounded-xl shadow-2xl flex items-start gap-3 border border-red-400 animate-in slide-in-from-top-4 duration-300">
+            <AlertCircle className="shrink-0 mt-0.5" size={20} />
+            <div className="text-xs">
+              <p className="font-bold text-sm mb-1">Lỗi kết nối nghiêm trọng</p>
+              <p className="opacity-90">{connectionError}</p>
+              <div className="mt-3 flex gap-2">
+                <button onClick={() => window.location.reload()} className="bg-white/20 px-3 py-1 rounded-md font-bold">Thử lại</button>
+                <button onClick={handleHome} className="bg-white/10 px-3 py-1 rounded-md">Cài đặt</button>
               </div>
             </div>
-          )}
-          {isFramed && (
-            <div className="bg-slate-800/95 backdrop-blur-md text-white p-4 rounded-xl shadow-2xl flex items-start gap-3 border border-slate-700">
-              <ShieldAlert className="shrink-0 mt-0.5 text-amber-500" size={20} />
-              <div className="text-xs">
-                <p className="font-bold">Vercel Toolbar đang hoạt động</p>
-                <p>Microphone sẽ bị chặn khi chạy trong iframe. Vui lòng nhấn nút dưới để mở trực tiếp:</p>
-                <a href={window.location.href} target="_top" className="mt-2 inline-flex items-center gap-1 font-bold text-cyan-400 hover:underline">
-                  Mở link trực tiếp <ExternalLink size={12} />
-                </a>
-              </div>
-            </div>
-          )}
-          {connectionError && !connectionError.includes("GEMINI_API_KEY") && (
-            <div className="bg-red-500/90 backdrop-blur-md text-white p-4 rounded-xl shadow-2xl flex items-start gap-3 border border-red-400">
-              <AlertCircle className="shrink-0 mt-0.5" size={20} />
-              <div className="text-xs">
-                <p className="font-bold">Lỗi kết nối</p>
-                <p>{connectionError}</p>
-                <button onClick={handleHome} className="mt-2 font-bold underline">Quay lại</button>
-              </div>
-            </div>
-          )}
+          </div>
         </div>
       )}
 
@@ -198,7 +209,7 @@ function App() {
         <div className="flex-1 w-full flex items-center justify-center p-8">
            <Visualizer isActive={isConnected} isSpeaking={isSpeaking} volume={volume} />
            <div className="absolute mt-64 text-slate-400 font-light tracking-widest text-sm uppercase text-center">
-              {isConnected ? (isSpeaking ? "Partner Speaking" : "Listening...") : (connectionError ? "Lỗi kết nối" : "Đang khởi tạo...")}
+              {isConnected ? (isSpeaking ? "Partner Speaking" : "Listening...") : (connectionError ? "Lỗi hệ thống" : "Đang khởi tạo...")}
            </div>
         </div>
 

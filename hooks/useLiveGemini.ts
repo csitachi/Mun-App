@@ -81,10 +81,10 @@ export const useLiveGemini = ({ language, proficiency, voiceName, mode }: UseLiv
   const connect = useCallback(async () => {
     setError(null);
     try {
+      // THE API_KEY MUST BE OBTAINED FROM process.env.API_KEY
       const apiKey = process.env.API_KEY;
       
       if (!apiKey || apiKey === 'YOUR_API_KEY_HERE') {
-        console.error("API_KEY is missing in process.env");
         throw new Error("MISSING_API_KEY");
       }
 
@@ -182,7 +182,7 @@ export const useLiveGemini = ({ language, proficiency, voiceName, mode }: UseLiv
           onclose: () => disconnect(),
           onerror: (e) => {
             console.error("Live session error", e);
-            setError("Kết nối Gemini thất bại. Hãy kiểm tra API Key.");
+            setError("Kết nối Gemini Live API thất bại. Có thể API Key của bạn không hợp lệ hoặc đã hết hạn.");
             disconnect();
           }
         }
@@ -193,9 +193,9 @@ export const useLiveGemini = ({ language, proficiency, voiceName, mode }: UseLiv
     } catch (error: any) {
       console.error("Connection error detail:", error);
       if (error.message === "MISSING_API_KEY") {
-        setError("LỖI: Biến môi trường API_KEY bị thiếu hoặc sai tên. Hãy kiểm tra Vercel Settings.");
+        setError("LỖI CẤU HÌNH: Bạn đã đặt tên biến là GEMINI_API_KEY, nhưng hệ thống yêu cầu tên chính xác là API_KEY. Hãy đổi tên biến trong Vercel Settings.");
       } else if (error.name === "NotAllowedError" || error.name === "PermissionDeniedError") {
-        setError("LỖI: Trình duyệt chặn Microphone. Hãy tắt Vercel Toolbar hoặc cấp quyền trong cài đặt trình duyệt.");
+        setError("LỖI MICROPHONE: Trình duyệt hoặc Vercel SafeFrame đã chặn Microphone. Hãy tắt Vercel Toolbar hoặc mở link trực tiếp.");
       } else {
         setError(error.message || "Lỗi không xác định khi kết nối.");
       }
