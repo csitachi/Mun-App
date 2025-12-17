@@ -1,12 +1,13 @@
 import React from 'react';
 import { Language, Proficiency, VoiceName, PracticeMode } from '../types';
-import { Mic, MessageCircle, Sparkles, BookOpen } from 'lucide-react';
+import { Mic, MessageCircle, Sparkles, BookOpen, Clock } from 'lucide-react';
 
 interface LanguageSelectorProps {
   onStart: (lang: Language, prof: Proficiency, voice: VoiceName, mode: PracticeMode) => void;
+  onViewHistory: () => void;
 }
 
-const LanguageSelector: React.FC<LanguageSelectorProps> = ({ onStart }) => {
+const LanguageSelector: React.FC<LanguageSelectorProps> = ({ onStart, onViewHistory }) => {
   const [lang, setLang] = React.useState<Language>(Language.SPANISH);
   const [prof, setProf] = React.useState<Proficiency>(Proficiency.BEGINNER);
   const [voice, setVoice] = React.useState<VoiceName>(VoiceName.Zephyr);
@@ -22,7 +23,15 @@ const LanguageSelector: React.FC<LanguageSelectorProps> = ({ onStart }) => {
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen p-6 animate-in fade-in duration-700">
-      <div className="w-full max-w-md space-y-8 bg-slate-800 p-8 rounded-3xl shadow-2xl border border-slate-700">
+      <div className="w-full max-w-md space-y-8 bg-slate-800 p-8 rounded-3xl shadow-2xl border border-slate-700 relative">
+        <button 
+          onClick={onViewHistory}
+          className="absolute top-6 right-6 p-2 text-slate-400 hover:text-cyan-400 hover:bg-slate-700 rounded-full transition-all"
+          title="View History"
+        >
+          <Clock size={24} />
+        </button>
+
         <div className="text-center space-y-2">
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-cyan-500/10 text-cyan-400 mb-4">
              <Mic size={32} />

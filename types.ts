@@ -30,7 +30,17 @@ export interface ChatMessage {
   isFinal: boolean;
 }
 
-export type AppStatus = 'setup' | 'active' | 'summary';
+export interface PastSession {
+  id: string;
+  date: string;
+  language: Language;
+  proficiency: Proficiency;
+  mode: PracticeMode;
+  summary?: string;
+  messages: ChatMessage[];
+}
+
+export type AppStatus = 'setup' | 'active' | 'summary' | 'history';
 
 export interface AppState {
   language: Language;
@@ -38,6 +48,7 @@ export interface AppState {
   mode: PracticeMode;
   status: AppStatus;
   summary?: string;
+  currentSessionId?: string;
 }
 
 export enum VoiceName {
