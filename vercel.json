@@ -12,7 +12,11 @@
       "headers": [
         {
           "key": "Permissions-Policy",
-          "value": "microphone=*"
+          "value": "microphone=(self), camera=(), megaphone=()"
+        },
+        {
+          "key": "X-Frame-Options",
+          "value": "SAMEORIGIN"
         }
       ]
     }
