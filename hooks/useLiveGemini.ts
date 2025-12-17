@@ -81,10 +81,10 @@ export const useLiveGemini = ({ language, proficiency, voiceName, mode }: UseLiv
   const connect = useCallback(async () => {
     setError(null);
     try {
-      // Kiểm tra API Key từ process.env.API_KEY theo yêu cầu
       const apiKey = process.env.API_KEY;
       
       if (!apiKey || apiKey === 'YOUR_API_KEY_HERE') {
+        console.error("API_KEY is missing in process.env");
         throw new Error("MISSING_API_KEY");
       }
 
@@ -109,7 +109,7 @@ export const useLiveGemini = ({ language, proficiency, voiceName, mode }: UseLiv
 
       const ai = new GoogleGenAI({ apiKey });
       
-      const systemInstruction = `You are a helpful and patient language tutor. Help the user practice ${language}. Proficiency: ${proficiency}. Practice Mode: ${mode}. Focus on natural conversation and provide gentle corrections only when necessary.`;
+      const systemInstruction = `You are a helpful and patient language tutor. Help the user practice ${language}. Proficiency: ${proficiency}. Mode: ${mode}.`;
 
       const sessionPromise = ai.live.connect({
         model: 'gemini-2.5-flash-native-audio-preview-09-2025',
@@ -182,7 +182,7 @@ export const useLiveGemini = ({ language, proficiency, voiceName, mode }: UseLiv
           onclose: () => disconnect(),
           onerror: (e) => {
             console.error("Live session error", e);
-            setError("Lỗi kết nối Gemini. Vui lòng kiểm tra lại API Key hoặc mạng.");
+            setError("Kết nối Gemini thất bại. Hãy kiểm tra API Key.");
             disconnect();
           }
         }
@@ -191,11 +191,11 @@ export const useLiveGemini = ({ language, proficiency, voiceName, mode }: UseLiv
       sessionRef.current = await sessionPromise;
 
     } catch (error: any) {
-      console.error("Connection error:", error);
+      console.error("Connection error detail:", error);
       if (error.message === "MISSING_API_KEY") {
-        setError("API Key chưa được cấu hình. Hãy đổi tên GEMINI_API_KEY thành API_KEY trong Vercel Settings.");
+        setError("LỖI: Biến môi trường API_KEY bị thiếu hoặc sai tên. Hãy kiểm tra Vercel Settings.");
       } else if (error.name === "NotAllowedError" || error.name === "PermissionDeniedError") {
-        setError("Không thể truy cập Microphone. Vui lòng tắt Vercel Toolbar hoặc dùng domain trực tiếp.");
+        setError("LỖI: Trình duyệt chặn Microphone. Hãy tắt Vercel Toolbar hoặc cấp quyền trong cài đặt trình duyệt.");
       } else {
         setError(error.message || "Lỗi không xác định khi kết nối.");
       }
