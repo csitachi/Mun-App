@@ -4,6 +4,9 @@
   "version": "1.0.0",
   "private": true,
   "description": "Real-time AI language practice partner using Gemini Live API",
+  "scripts": {
+    "build": "echo 'No build step required'"
+  },
   "dependencies": {
     "@google/genai": "^1.34.0",
     "lucide-react": "^0.561.0",
