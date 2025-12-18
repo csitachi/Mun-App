@@ -1,12 +1,13 @@
 
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { PhoneOff, MessageSquare, Settings, AlertCircle, ExternalLink, ShieldAlert, Globe, CheckCircle2, XCircle, RefreshCw, History, Loader2 } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { PhoneOff, MessageSquare, Settings, Share, AlertTriangle } from 'lucide-react';
+import { GoogleGenAI } from '@google/genai';
 import LanguageSelector from './components/LanguageSelector';
 import Visualizer from './components/Visualizer';
 import SummaryView from './components/SummaryView';
 import HistoryView from './components/HistoryView';
 import { useLiveGemini } from './hooks/useLiveGemini';
-import { AppState, Language, Proficiency, VoiceName, PracticeMode, PastSession } from './types';
+import { AppState, Language, Proficiency, VoiceName, PracticeMode, ChatMessage, PastSession } from './types';
 
 function App() {
   const [appState, setAppState] = useState<AppState>({
@@ -17,234 +18,199 @@ function App() {
   });
   const [voice, setVoice] = useState<VoiceName>(VoiceName.Zephyr);
   const [showTranscript, setShowTranscript] = useState(false);
-  const [isFramed, setIsFramed] = useState(false);
-  const [showDiagnostic, setShowDiagnostic] = useState(false);
-  const [apiStatus, setApiStatus] = useState<'idle' | 'checking' | 'ok' | 'fail'>('idle');
-  
+  const [isIOS, setIsIOS] = useState(false);
+  const [isStandalone, setIsStandalone] = useState(false);
+  const [micError, setMicError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const { connect, disconnect, isConnected, isConnecting, isSpeaking, messages, volume, error: connectionError } = useLiveGemini();
+  const { connect, disconnect, isConnected, isSpeaking, messages, volume } = useLiveGemini({
+    language: appState.language,
+    proficiency: appState.proficiency,
+    voiceName: voice,
+    mode: appState.mode
+  });
 
   useEffect(() => {
-    const checkFrame = () => {
-      try {
-        return window.self !== window.top || document.referrer.includes('vercel.app');
-      } catch (e) { return true; }
-    };
-    setIsFramed(checkFrame());
+    const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as any).MSStream;
+    const standalone = window.matchMedia('(display-mode: standalone)').matches || (navigator as any).standalone;
+    setIsIOS(ios);
+    setIsStandalone(standalone);
+    
+    // Check if framed (Vercel Preview Toolbar issue)
+    if (window.self !== window.top) {
+      console.warn("App is running inside an iframe. Microphone access might be blocked by the parent frame (e.g. Vercel Preview Toolbar).");
+    }
   }, []);
 
   useEffect(() => {
-    if (showTranscript && messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    if (appState.status === 'active' && !isConnected) {
+      connect().catch(err => {
+        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+          setMicError("Microphone permission denied. If you are on Vercel, please disable the 'Preview Toolbar' or use the direct production URL.");
+        } else {
+          setMicError("Could not start conversation: " + err.message);
+        }
+      });
     }
-  }, [messages, showTranscript]);
+  }, [appState.status, connect, isConnected]);
 
-  const testApiConnection = async () => {
-    setApiStatus('checking');
-    try {
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${process.env.API_KEY}`);
-      setApiStatus(response.ok ? 'ok' : 'fail');
-    } catch (e) { setApiStatus('fail'); }
+  const saveSession = (summary: string, history: ChatMessage[]) => {
+    const newSession: PastSession = {
+      id: appState.currentSessionId || Date.now().toString(),
+      date: new Date().toISOString(),
+      language: appState.language,
+      proficiency: appState.proficiency,
+      mode: appState.mode,
+      summary: summary,
+      messages: history
+    };
+
+    const saved = localStorage.getItem('lingua_live_history');
+    let sessions: PastSession[] = [];
+    if (saved) {
+      try { sessions = JSON.parse(saved); } catch (e) {}
+    }
+    sessions.push(newSession);
+    localStorage.setItem('lingua_live_history', JSON.stringify(sessions));
   };
 
-  const handleStart = useCallback(async (lang: Language, prof: Proficiency, v: VoiceName, m: PracticeMode) => {
+  const handleStart = (lang: Language, prof: Proficiency, v: VoiceName, mode: PracticeMode) => {
+    setMicError(null);
     setVoice(v);
-    setAppState({ language: lang, proficiency: prof, mode: m, status: 'active', currentSessionId: Date.now().toString() });
-    await connect({ language: lang, proficiency: prof, voiceName: v, mode: m });
-  }, [connect]);
+    setAppState({ 
+      language: lang, 
+      proficiency: prof, 
+      mode: mode, 
+      status: 'active',
+      currentSessionId: Date.now().toString()
+    });
+  };
 
-  const handleEnd = useCallback(() => {
-    disconnect();
-    
-    if (messages.length > 0) {
-      const newSession: PastSession = {
-        id: appState.currentSessionId || Date.now().toString(),
-        date: new Date().toISOString(),
-        language: appState.language,
-        proficiency: appState.proficiency,
-        mode: appState.mode,
-        messages: [...messages],
-        summary: "Practice session completed successfully."
-      };
-      
-      const history = JSON.parse(localStorage.getItem('lingua_live_history') || '[]');
-      localStorage.setItem('lingua_live_history', JSON.stringify([newSession, ...history]));
+  const generateSummary = async (history: ChatMessage[]) => {
+    if (!process.env.API_KEY || history.length < 2) {
+      const fallback = "Conversation ended.";
+      setAppState(prev => ({ ...prev, summary: fallback }));
+      saveSession(fallback, history);
+      return;
     }
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const transcript = history.map(m => `${m.role.toUpperCase()}: ${m.text}`).join('\n');
+      const response = await ai.models.generateContent({
+        model: 'gemini-3-flash-preview',
+        contents: `Provide a concise summary of topics, vocabulary, and feedback for this ${appState.language} practice session:\n${transcript}`,
+      });
+      const summaryText = response.text || "Conversation completed.";
+      setAppState(prev => ({ ...prev, summary: summaryText }));
+      saveSession(summaryText, history);
+    } catch (error) {
+      const errText = "Could not generate summary.";
+      setAppState(prev => ({ ...prev, summary: errText }));
+      saveSession(errText, history);
+    }
+  };
 
-    setAppState(prev => ({ ...prev, status: 'summary', summary: "Phiên luyện tập đã kết thúc. Bạn có thể xem lại bản ghi hội thoại trong phần lịch sử." }));
-  }, [disconnect, messages, appState]);
+  const handleEnd = () => {
+    disconnect();
+    const currentMessages = [...messages]; 
+    setAppState(prev => ({ ...prev, status: 'summary', summary: undefined }));
+    generateSummary(currentMessages);
+  };
 
   const handleHome = () => {
-    disconnect();
+    setMicError(null);
     setAppState(prev => ({ ...prev, status: 'setup', summary: undefined, currentSessionId: undefined }));
   };
   
   const handleViewHistory = () => setAppState(prev => ({ ...prev, status: 'history' }));
 
-  if (isFramed) {
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  if (appState.status === 'setup') {
     return (
-      <div className="fixed inset-0 z-[9999] bg-slate-950 flex items-center justify-center p-8 text-center">
-        <div className="max-w-md space-y-8">
-          <div className="relative w-24 h-24 bg-red-500/10 text-red-500 rounded-full flex items-center justify-center mx-auto border-2 border-red-500/20">
-            <ShieldAlert size={56} />
+      <div className="relative min-h-screen">
+        <LanguageSelector onStart={handleStart} onViewHistory={handleViewHistory} />
+        {isIOS && !isStandalone && (
+          <div className="fixed bottom-6 left-1/2 -translate-x-1/2 w-[90%] max-w-sm bg-slate-800/90 backdrop-blur-md border border-slate-700 p-4 rounded-2xl shadow-2xl z-50 animate-bounce">
+            <div className="flex items-center gap-3">
+              <div className="bg-cyan-500 p-2 rounded-lg text-white">
+                <Share size={20} />
+              </div>
+              <p className="text-xs text-slate-200">
+                To use on iOS: Tap <span className="font-bold">Share</span> and select <span className="font-bold text-cyan-400">"Add to Home Screen"</span> for the full experience.
+              </p>
+            </div>
           </div>
-          <div className="space-y-4">
-            <h1 className="text-4xl font-black text-white uppercase tracking-tighter">SafeFrame Blocked</h1>
-            <p className="text-slate-400 leading-relaxed">
-              Trình duyệt đang chặn Microphone vì Vercel Toolbar. Vui lòng mở trực tiếp ứng dụng.
-            </p>
-          </div>
-          <button 
-            onClick={() => window.top!.location.href = window.location.href}
-            className="flex items-center justify-center gap-3 w-full py-6 rounded-3xl bg-white text-black font-black shadow-2xl hover:bg-slate-200 transition-all active:scale-95 group"
-          >
-            MỞ TRỰC TIẾP <ExternalLink size={24} />
-          </button>
-        </div>
+        )}
       </div>
     );
   }
 
-  return (
-    <div className="flex h-screen bg-slate-950 overflow-hidden relative selection:bg-cyan-500/30">
-      <button 
-        onClick={() => setShowDiagnostic(!showDiagnostic)}
-        className="fixed top-4 right-4 z-[100] p-3 bg-slate-900/50 backdrop-blur-xl border border-slate-800 rounded-full text-slate-500 hover:text-cyan-400 transition-all"
-      >
-        <Settings size={20} />
-      </button>
+  if (appState.status === 'history') {
+    return <HistoryView onBack={handleHome} />;
+  }
 
-      {showDiagnostic && (
-        <div className="fixed inset-0 z-[110] bg-slate-950/90 backdrop-blur-2xl flex items-center justify-center p-6">
-           <div className="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-[2.5rem] p-8 shadow-2xl space-y-6">
-              <h3 className="text-xl font-bold text-white flex items-center gap-2">
-                <Globe size={22} className="text-cyan-400" /> System Diagnostics
-              </h3>
-              <div className="space-y-3">
-                <StatusItem label="API_KEY Configured" status={!!process.env.API_KEY && process.env.API_KEY !== 'undefined'} />
-                <StatusItem label="Secure Context" status={window.isSecureContext} />
-                <StatusItem label="Google API Reachable" status={apiStatus === 'ok'} 
-                  extra={
-                    <button onClick={testApiConnection} disabled={apiStatus === 'checking'} className="p-1 hover:text-cyan-400">
-                      <RefreshCw size={14} className={apiStatus === 'checking' ? 'animate-spin' : ''} />
-                    </button>
-                  } 
-                />
-              </div>
-              <button onClick={() => setShowDiagnostic(false)} className="w-full py-4 bg-slate-800 text-white rounded-2xl font-bold hover:bg-slate-700">Close</button>
+  if (appState.status === 'summary') {
+    return <SummaryView summary={appState.summary} onHome={handleHome} />;
+  }
+
+  return (
+    <div className="flex h-screen bg-slate-900 overflow-hidden relative">
+      <div className="absolute inset-0 bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 z-0" />
+      
+      {micError && (
+        <div className="absolute top-20 left-1/2 -translate-x-1/2 z-50 w-[90%] max-w-md bg-red-500/90 backdrop-blur-md text-white p-4 rounded-xl shadow-2xl flex items-start gap-3 border border-red-400">
+          <AlertTriangle className="shrink-0" size={20} />
+          <div className="text-sm">
+            <p className="font-bold mb-1">Microphone Error</p>
+            <p>{micError}</p>
+            <button onClick={handleHome} className="mt-2 underline font-medium">Go back to settings</button>
+          </div>
+        </div>
+      )}
+
+      <div className={`relative z-10 flex flex-col items-center justify-center flex-1 transition-all duration-500 ${showTranscript ? 'w-2/3' : 'w-full'}`}>
+        <div className="absolute top-12 left-6 z-20">
+          <div className="flex items-center space-x-2 bg-slate-800/50 backdrop-blur-md px-4 py-2 rounded-full border border-slate-700/50">
+            <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500 animate-pulse' : 'bg-yellow-500'}`} />
+            <span className="text-slate-200 font-medium text-[10px] md:text-sm">
+              {appState.language} • {appState.proficiency}
+            </span>
+          </div>
+        </div>
+        <div className="flex-1 w-full flex items-center justify-center p-8">
+           <Visualizer isActive={isConnected} isSpeaking={isSpeaking} volume={volume} />
+           <div className="absolute mt-64 text-slate-400 font-light tracking-widest text-sm uppercase">
+              {isConnected ? (isSpeaking ? "Partner Speaking" : "Listening...") : (micError ? "Connection Blocked" : "Connecting...")}
            </div>
         </div>
-      )}
-
-      {appState.status === 'setup' ? (
-        <LanguageSelector onStart={handleStart} onViewHistory={handleViewHistory} />
-      ) : appState.status === 'history' ? (
-        <HistoryView onBack={handleHome} />
-      ) : appState.status === 'summary' ? (
-        <SummaryView summary={appState.summary} onHome={handleHome} />
-      ) : (
-        <div className="flex-1 flex flex-col items-center justify-center relative">
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-slate-900 via-slate-950 to-slate-950" />
-          
-          {(connectionError || (!isConnected && !isConnecting)) && (
-            <div className="absolute top-20 left-1/2 -translate-x-1/2 z-50 w-[90%] max-w-md animate-in slide-in-from-top-4">
-              <div className="bg-red-500/10 backdrop-blur-2xl p-6 rounded-3xl border border-red-500/30 shadow-2xl space-y-4">
-                <div className="flex items-center gap-3 text-red-500 font-black uppercase tracking-tighter">
-                  <AlertCircle size={24} /> {connectionError ? 'Connection Error' : 'Ready to Connect'}
-                </div>
-                <p className="text-sm text-red-200/80 leading-relaxed font-medium">
-                  {connectionError || "Click Reconnect to try starting the session again."}
-                </p>
-                <div className="flex gap-2">
-                  <button onClick={() => handleStart(appState.language, appState.proficiency, voice, appState.mode)} className="flex-1 bg-red-500 text-white py-3 rounded-xl text-xs font-black hover:bg-red-600">RECONNECT</button>
-                  <button onClick={handleHome} className="flex-1 bg-slate-800 text-slate-300 py-3 rounded-xl text-xs font-bold">CANCEL</button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          <div className="relative z-10 flex flex-col items-center justify-center w-full h-full max-w-4xl mx-auto p-8">
-            <div className="mb-12 flex flex-col items-center gap-4">
-               <div className="flex items-center space-x-3 bg-slate-900/80 backdrop-blur-xl px-6 py-3 rounded-full border border-slate-800 shadow-2xl">
-                  {isConnecting ? (
-                    <Loader2 size={16} className="text-cyan-400 animate-spin" />
-                  ) : (
-                    <div className={`w-3 h-3 rounded-full ${isConnected ? 'bg-green-500 animate-pulse shadow-[0_0_15px_#22c55e]' : 'bg-slate-700'}`} />
-                  )}
-                  <span className="text-slate-300 font-bold tracking-widest uppercase text-[10px]">
-                    {isConnecting ? 'CONNECTING...' : isConnected ? `${appState.language} SESSION` : 'DISCONNECTED'}
-                  </span>
-               </div>
-            </div>
-
-            <div className="flex-1 flex items-center justify-center w-full">
-               <Visualizer isActive={isConnected} isSpeaking={isSpeaking} volume={volume} />
-            </div>
-
-            <div className="mt-16 flex items-center gap-10">
-               <button 
-                 onClick={() => setShowTranscript(!showTranscript)}
-                 disabled={!isConnected}
-                 className={`p-6 rounded-3xl transition-all shadow-2xl border ${!isConnected ? 'opacity-50 cursor-not-allowed' : ''} ${showTranscript ? 'bg-cyan-500 text-white border-cyan-400' : 'bg-slate-900 text-slate-500 border-slate-800 hover:text-cyan-400'}`}
-               >
-                 <MessageSquare size={32} />
-               </button>
-               <button 
-                 onClick={handleEnd}
-                 className="p-12 rounded-[3rem] bg-red-500 text-white shadow-[0_20px_60px_rgba(239,68,68,0.4)] hover:bg-red-600 hover:scale-105 active:scale-95 transition-all group"
-               >
-                 <PhoneOff size={44} className="group-hover:rotate-12 transition-transform" />
-               </button>
-            </div>
-          </div>
-
-          <div className={`absolute right-0 top-0 bottom-0 z-50 bg-slate-950/80 backdrop-blur-3xl border-l border-slate-800/50 transition-all duration-500 shadow-2xl ${showTranscript ? 'w-full md:w-[450px] translate-x-0' : 'w-0 translate-x-full opacity-0'}`}>
-             <div className="p-8 border-b border-slate-800 flex justify-between items-center text-white">
-                <h2 className="text-xl font-black flex items-center gap-3 tracking-tighter">
-                  <History size={20} className="text-cyan-500" /> LIVE TRANSCRIPT
-                </h2>
-                <button onClick={() => setShowTranscript(false)} className="p-2 hover:bg-slate-800 rounded-full"><XCircle size={24} /></button>
-             </div>
-             <div className="flex-1 h-[calc(100%-100px)] overflow-y-auto p-8 space-y-6 scrollbar-hide">
-                {messages.length === 0 && (
-                  <div className="h-full flex flex-col items-center justify-center text-slate-600 text-sm text-center">
-                    <MessageSquare size={48} className="mb-4 opacity-10" />
-                    <p>Hội thoại sẽ được ghi lại tại đây...</p>
-                  </div>
-                )}
-                {messages.map((msg) => (
-                    <div key={msg.id} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'} animate-in slide-in-from-bottom-2`}>
-                        <div className={`max-w-[85%] rounded-[2rem] px-6 py-4 text-sm leading-relaxed ${
-                          msg.role === 'user' 
-                          ? 'bg-cyan-500/10 text-cyan-50 border border-cyan-500/20' 
-                          : 'bg-slate-900 text-slate-300 border border-slate-800'
-                        }`}>
-                          {msg.text}
-                        </div>
-                    </div>
-                ))}
-                <div ref={messagesEndRef} />
-             </div>
-          </div>
+        <div className="pb-12 flex items-center space-x-6">
+          <button onClick={() => setShowTranscript(!showTranscript)} className={`p-4 rounded-full ${showTranscript ? 'bg-white text-slate-900' : 'bg-slate-800 text-white hover:bg-slate-700'} transition-colors`}><MessageSquare size={24} /></button>
+          <button onClick={handleEnd} className="p-6 rounded-full bg-red-500 text-white shadow-lg hover:bg-red-600 transition-colors"><PhoneOff size={32} /></button>
+          <div className="p-4 rounded-full bg-slate-800 text-slate-500"><Settings size={24} /></div>
         </div>
-      )}
-    </div>
-  );
-}
-
-function StatusItem({ label, status, extra }: { label: string, status: boolean, extra?: React.ReactNode }) {
-  return (
-    <div className="flex justify-between items-center p-4 bg-slate-950/50 rounded-2xl border border-slate-800/50">
-      <div className="flex items-center gap-2">
-        <span className="text-[11px] text-slate-400 font-bold uppercase tracking-wider">{label}</span>
-        {extra}
       </div>
-      {status ? (
-        <CheckCircle2 className="text-green-500" size={18} />
-      ) : (
-        <XCircle className="text-red-500" size={18} />
-      )}
+      <div className={`relative z-20 bg-slate-950/90 backdrop-blur-xl border-l border-slate-800 transition-all duration-500 flex flex-col ${showTranscript ? 'w-[400px] translate-x-0' : 'w-0 translate-x-full opacity-0'}`}>
+        <div className="p-6 border-b border-slate-800 flex justify-between items-center text-white">
+            <h2 className="font-semibold">Transcript</h2>
+            <button onClick={() => setShowTranscript(false)} className="hover:text-cyan-400 transition-colors">✕</button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-hide">
+            {messages.length === 0 && (
+                <div className="text-center text-slate-500 mt-10 italic">
+                    Say hello to start!
+                </div>
+            )}
+            {messages.map((msg) => (
+                <div key={msg.id} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
+                    <div className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm ${msg.role === 'user' ? 'bg-cyan-500/10 text-cyan-100 border border-cyan-500/20' : 'bg-slate-800 text-slate-200 border border-slate-700'}`}>{msg.text}</div>
+                </div>
+            ))}
+            <div ref={messagesEndRef} />
+        </div>
+      </div>
     </div>
   );
 }

@@ -1,4 +1,3 @@
-
 import { Blob } from '@google/genai';
 
 export function base64ToUint8Array(base64: string): Uint8Array {
@@ -26,8 +25,7 @@ export async function decodeAudioData(
   sampleRate: number,
   numChannels: number,
 ): Promise<AudioBuffer> {
-  // Sử dụng buffer view an toàn hơn để tránh lỗi byteLength không khớp
-  const dataInt16 = new Int16Array(data.buffer, data.byteOffset, data.byteLength / 2);
+  const dataInt16 = new Int16Array(data.buffer);
   const frameCount = dataInt16.length / numChannels;
   const buffer = ctx.createBuffer(numChannels, frameCount, sampleRate);
 
@@ -44,9 +42,8 @@ export function createPcmBlob(data: Float32Array): Blob {
   const l = data.length;
   const int16 = new Int16Array(l);
   for (let i = 0; i < l; i++) {
-    // Chuyển đổi Float32 (-1.0 to 1.0) sang Int16 (-32768 to 32767) với clipping
-    const s = Math.max(-1, Math.min(1, data[i]));
-    int16[i] = s < 0 ? s * 32768 : s * 32767;
+    // Convert Float32 (-1.0 to 1.0) to Int16 (-32768 to 32767)
+    int16[i] = Math.max(-1, Math.min(1, data[i])) * 32768;
   }
   return {
     data: arrayBufferToBase64(new Uint8Array(int16.buffer)),
