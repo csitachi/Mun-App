@@ -44,7 +44,7 @@ export const useLiveGemini = ({ language, proficiency, voiceName, mode }: UseLiv
   }, []);
 
   const disconnect = useCallback(() => {
-    console.log("Disconnecting Gemini Live session...");
+    console.log("LinguaLive: Disconnecting...");
     if (sessionRef.current) {
         try { sessionRef.current.close(); } catch (e) {}
         sessionRef.current = null;
@@ -74,25 +74,24 @@ export const useLiveGemini = ({ language, proficiency, voiceName, mode }: UseLiv
 
   const connect = useCallback(async () => {
     setError(null);
-    console.log("Initializing connection to Gemini Live API...");
+    console.log("LinguaLive: Initiating connection...");
     
     try {
       const apiKey = process.env.API_KEY;
       
-      if (!apiKey) {
-        console.error("CRITICAL ERROR: process.env.API_KEY is undefined.");
+      if (!apiKey || apiKey === 'YOUR_API_KEY_HERE') {
         throw new Error("MISSING_API_KEY");
       }
 
-      if (window.self !== window.top) {
-        throw new Error("IFRAME_BLOCKED");
+      // Check context
+      if (!window.isSecureContext) {
+        throw new Error("NOT_SECURE_CONTEXT");
       }
 
       const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
       const outputCtx = new AudioContextClass({ sampleRate: 24000 });
       if (outputCtx.state === 'suspended') await outputCtx.resume();
       audioContextRef.current = outputCtx;
-      nextStartTimeRef.current = outputCtx.currentTime;
 
       const inputCtx = new AudioContextClass({ sampleRate: 16000 });
       if (inputCtx.state === 'suspended') await inputCtx.resume();
@@ -103,13 +102,14 @@ export const useLiveGemini = ({ language, proficiency, voiceName, mode }: UseLiv
       analyserRef.current = analyser;
       analyser.connect(outputCtx.destination);
 
-      console.log("Requesting microphone access...");
+      console.log("LinguaLive: Requesting Mic...");
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
 
       const ai = new GoogleGenAI({ apiKey });
-      const systemInstruction = `You are an expert language tutor. Help the user practice ${language}. Proficiency level: ${proficiency}. Current mode: ${mode}. Be encouraging, keep the flow natural, and provide brief corrections if requested.`;
+      const systemInstruction = `You are an expert language partner. Language: ${language}. Level: ${proficiency}. Mode: ${mode}. Use short, conversational phrases. Fix major errors only.`;
 
+      console.log("LinguaLive: Connecting to Gemini WebSocket...");
       const sessionPromise = ai.live.connect({
         model: 'gemini-2.5-flash-native-audio-preview-09-2025',
         config: {
@@ -123,7 +123,7 @@ export const useLiveGemini = ({ language, proficiency, voiceName, mode }: UseLiv
         },
         callbacks: {
           onopen: () => {
-            console.log("WebSocket Session Opened Successfully.");
+            console.log("LinguaLive: WebSocket OPENED");
             setIsConnected(true);
             const source = inputCtx.createMediaStreamSource(stream);
             const scriptProcessor = inputCtx.createScriptProcessor(4096, 1, 1);
@@ -179,12 +179,12 @@ export const useLiveGemini = ({ language, proficiency, voiceName, mode }: UseLiv
             }
           },
           onclose: (e) => {
-            console.log("Session closed:", e);
+            console.warn("LinguaLive: WebSocket CLOSED", e);
             disconnect();
           },
           onerror: (e) => {
-            console.error("Gemini Session Error:", e);
-            setError("Lỗi kết nối API. Có thể API Key của bạn không hỗ trợ tính năng Native Audio.");
+            console.error("LinguaLive: WebSocket ERROR", e);
+            setError("Lỗi kết nối Gemini. Có thể API Key của bạn không hỗ trợ (yêu cầu Tier 'Pay-as-you-go' hoặc Google Cloud Project phù hợp).");
             disconnect();
           }
         }
@@ -193,13 +193,15 @@ export const useLiveGemini = ({ language, proficiency, voiceName, mode }: UseLiv
       sessionRef.current = await sessionPromise;
 
     } catch (error: any) {
-      console.error("CONNECTION FAILED:", error);
+      console.error("LinguaLive: CRITICAL FAILURE", error);
       if (error.message === "MISSING_API_KEY") {
-        setError("LỖI CẤU HÌNH: Ứng dụng không tìm thấy API_KEY. Hãy kiểm tra tab Environment Variables trong Vercel và đảm bảo tên biến là 'API_KEY' (không phải 'GEMINI_API_KEY').");
-      } else if (error.message === "IFRAME_BLOCKED" || error.name === "NotAllowedError" || error.name === "PermissionDeniedError") {
-        setError("LỖI MICROPHONE: Microphone bị chặn do đang chạy trong SafeFrame/Iframe của Vercel Toolbar. Hãy tắt Toolbar trong Vercel Settings.");
+        setError("LỖI CẤU HÌNH: Không tìm thấy API_KEY trong biến môi trường. Hãy kiểm tra cài đặt Vercel.");
+      } else if (error.message === "NOT_SECURE_CONTEXT") {
+        setError("LỖI BẢO MẬT: Microphone chỉ hoạt động trên HTTPS. Hãy đảm bảo bạn đang dùng link https://...");
+      } else if (error.name === "NotAllowedError" || error.name === "PermissionDeniedError") {
+        setError("LỖI QUYỀN TRUY CẬP: Trình duyệt đã chặn Microphone. Hãy tắt Vercel Toolbar (SafeFrame) và tải lại trang.");
       } else {
-        setError(`Lỗi: ${error.message || "Không xác định"}`);
+        setError(`Lỗi: ${error.message || "Không thể khởi tạo kết nối."}`);
       }
       disconnect();
       throw error;
