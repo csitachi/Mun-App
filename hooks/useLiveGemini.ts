@@ -1,3 +1,4 @@
+
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { GoogleGenAI, LiveServerMessage, Modality } from '@google/genai';
 import { ChatMessage, Language, Proficiency, VoiceName, PracticeMode } from '../types';
@@ -20,7 +21,7 @@ export const useLiveGemini = ({ language, proficiency, voiceName, mode }: UseLiv
   const inputAudioContextRef = useRef<AudioContext | null>(null);
   const nextStartTimeRef = useRef<number>(0);
   const sourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
-  const sessionRef = useRef<Promise<any> | null>(null);
+  const sessionRef = useRef<any>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
@@ -36,16 +37,16 @@ export const useLiveGemini = ({ language, proficiency, voiceName, mode }: UseLiv
       }
       return [
         ...prev,
-        { id: Date.now().toString(), role, text, timestamp: new Date(), isFinal }
+        { id: Math.random().toString(36).substring(7), role, text, timestamp: new Date(), isFinal }
       ];
     });
   }, []);
 
   const disconnect = useCallback(() => {
     if (sessionRef.current) {
-        sessionRef.current.then((session: any) => {
-             if(session.close) session.close();
-        }).catch(() => {});
+        try {
+          sessionRef.current.close();
+        } catch (e) {}
         sessionRef.current = null;
     }
 
@@ -60,15 +61,17 @@ export const useLiveGemini = ({ language, proficiency, voiceName, mode }: UseLiv
     }
 
     if (inputAudioContextRef.current) {
-      inputAudioContextRef.current.close();
+      inputAudioContextRef.current.close().catch(() => {});
       inputAudioContextRef.current = null;
     }
     if (audioContextRef.current) {
-      audioContextRef.current.close();
+      audioContextRef.current.close().catch(() => {});
       audioContextRef.current = null;
     }
 
-    sourcesRef.current.forEach(source => source.stop());
+    sourcesRef.current.forEach(source => {
+      try { source.stop(); } catch (e) {}
+    });
     sourcesRef.current.clear();
 
     setIsConnected(false);
@@ -78,25 +81,20 @@ export const useLiveGemini = ({ language, proficiency, voiceName, mode }: UseLiv
 
   const connect = useCallback(async () => {
     try {
-      if (!process.env.API_KEY) {
-        console.error("API Key not found");
+      if (!process.env.API_KEY || process.env.API_KEY === 'undefined') {
+        console.error("LinguaLive: API Key missing.");
         return;
       }
 
       const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
       
       const outputCtx = new AudioContextClass({ sampleRate: 24000 });
-      // CRITICAL for iOS: Resume context on user interaction
-      if (outputCtx.state === 'suspended') {
-        await outputCtx.resume();
-      }
+      if (outputCtx.state === 'suspended') await outputCtx.resume();
       audioContextRef.current = outputCtx;
       nextStartTimeRef.current = outputCtx.currentTime;
 
       const inputCtx = new AudioContextClass({ sampleRate: 16000 });
-      if (inputCtx.state === 'suspended') {
-        await inputCtx.resume();
-      }
+      if (inputCtx.state === 'suspended') await inputCtx.resume();
       inputAudioContextRef.current = inputCtx;
 
       const analyser = outputCtx.createAnalyser();
@@ -109,17 +107,17 @@ export const useLiveGemini = ({ language, proficiency, voiceName, mode }: UseLiv
 
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       
-      let systemInstruction = `You are a helpful and patient language tutor. Your goal is to help the user practice speaking ${language}. The user's proficiency level is ${proficiency}. `;
+      let systemInstruction = `You are a helpful and patient language tutor. Your goal is to help the user practice speaking ${language}. The user's proficiency level is ${proficiency}. Keep your responses concise to encourage back-and-forth flow. `;
 
       switch (mode) {
         case PracticeMode.ROLE_PLAY:
-          systemInstruction += `Mode: Role Play. Stay in character.`;
+          systemInstruction += `Mode: Role Play. Stay in character and respond to the user's scenarios.`;
           break;
         case PracticeMode.GRAMMAR_FOCUS:
-          systemInstruction += `Mode: Grammar Focus. Correct mistakes explicitly.`;
+          systemInstruction += `Mode: Grammar Focus. Provide brief, gentle corrections for any mistakes the user makes.`;
           break;
         default:
-          systemInstruction += `Mode: Free Talk. Natural conversation.`;
+          systemInstruction += `Mode: Free Talk. Engage in natural conversation on any topic the user brings up.`;
           break;
       }
 
@@ -136,6 +134,7 @@ export const useLiveGemini = ({ language, proficiency, voiceName, mode }: UseLiv
         },
         callbacks: {
           onopen: () => {
+            console.log("LinguaLive: Connection opened.");
             setIsConnected(true);
             const source = inputCtx.createMediaStreamSource(stream);
             const scriptProcessor = inputCtx.createScriptProcessor(4096, 1, 1);
@@ -144,7 +143,7 @@ export const useLiveGemini = ({ language, proficiency, voiceName, mode }: UseLiv
             scriptProcessor.onaudioprocess = (e) => {
               const inputData = e.inputBuffer.getChannelData(0);
               const pcmBlob = createPcmBlob(inputData);
-              sessionPromise.then((session: any) => {
+              sessionPromise.then((session) => {
                 session.sendRealtimeInput({ media: pcmBlob });
               });
             };
@@ -169,9 +168,7 @@ export const useLiveGemini = ({ language, proficiency, voiceName, mode }: UseLiv
               const audioBuffer = await decodeAudioData(base64ToUint8Array(audioData), outputCtx, 24000, 1);
               
               const currentTime = outputCtx.currentTime;
-              if (nextStartTimeRef.current < currentTime) {
-                nextStartTimeRef.current = currentTime;
-              }
+              nextStartTimeRef.current = Math.max(nextStartTimeRef.current, currentTime);
               
               const source = outputCtx.createBufferSource();
               source.buffer = audioBuffer;
@@ -187,40 +184,49 @@ export const useLiveGemini = ({ language, proficiency, voiceName, mode }: UseLiv
             }
 
             if (msg.serverContent?.interrupted) {
-               sourcesRef.current.forEach(s => s.stop());
+               sourcesRef.current.forEach(s => {
+                 try { s.stop(); } catch(e) {}
+               });
                sourcesRef.current.clear();
                nextStartTimeRef.current = 0;
                setIsSpeaking(false);
             }
           },
-          onclose: () => disconnect(),
-          onerror: () => disconnect()
+          onclose: (e) => {
+            console.log("LinguaLive: Connection closed.", e);
+            disconnect();
+          },
+          onerror: (e) => {
+            console.error("LinguaLive: Connection error.", e);
+            disconnect();
+          }
         }
       });
 
-      sessionRef.current = sessionPromise;
+      sessionRef.current = await sessionPromise;
 
     } catch (error) {
-      console.error("Connection failed", error);
+      console.error("LinguaLive: Connection failed.", error);
       disconnect();
+      throw error;
     }
   }, [language, proficiency, voiceName, mode, disconnect, addMessage]);
 
   useEffect(() => {
     let animationFrameId: number;
     const updateVolume = () => {
-        if (analyserRef.current) {
+        if (analyserRef.current && isConnected) {
             const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
             analyserRef.current.getByteFrequencyData(dataArray);
             let sum = 0;
             for(let i=0; i<dataArray.length; i++) sum += dataArray[i];
-            setVolume(sum / dataArray.length / 128); 
+            setVolume(sum / dataArray.length / 255); 
         } 
         animationFrameId = requestAnimationFrame(updateVolume);
     };
     updateVolume();
     return () => cancelAnimationFrame(animationFrameId);
-  }, [isSpeaking]);
+  }, [isConnected]);
 
   return { connect, disconnect, isConnected, isSpeaking, messages, volume };
 };
